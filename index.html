@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>烟台四中22级回忆录 | 青春永不散场</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
         * {
             margin: 0;
@@ -807,6 +808,10 @@
         // 全局状态
         let userName = localStorage.getItem('user_name');
         let isAdmin = false;
+         // Supabase配置
+const SUPABASE_URL = 'https://vavhprcickgqywegsvsf.supabase.co';  // 替换为您的实际URL
+const SUPABASE_KEY = 'SUPABASE_CLIENT_API_KEY';  // 替换为您的实际密钥
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
         const ADMIN_PWD = "admin123";
         const COMMENT_KEY = "yishui22_comments";
         const MEDIA_KEY = "yishui22_media";
@@ -958,28 +963,154 @@
         }
 
         // ---------------------- 评论相关 ----------------------
-        function initComments() {
-            try {
-                const savedComments = JSON.parse(localStorage.getItem(COMMENT_KEY) || '{}');
-                const topicIds = [1,2,3,4,6,8,9,10,11,12,13,'free'];
-                
-                topicIds.forEach(topicId => {
-                    const listEl = document.getElementById(`comment-list-${topicId}`);
-                    if (!listEl) return;
-                    
-                    let comments = savedComments[topicId] || [];
-                    comments.sort((a,b) => (a.time || 0) - (b.time || 0));
-                    listEl.innerHTML = '';
+      async function initComments() {
+    try {
+        // 从Supabase获取所有评论
+        const { data: comments, error } = await supabase
+            .from('comments')
+            .select('*')
+            .order('created_at', { ascending: true });
 
-                    // 扁平化所有评论（包括回复）
-                    const flatComments = [];
-                    comments.forEach(cmt => {
-                        flatComments.push({...cmt, level: 0});
-                        if (cmt.replies && cmt.replies.length > 0) {
-                            flattenReplies(cmt.replies, flatComments, cmt.id, cmt.author);
-                        }
-                    });
+        if (error) {
+            console.error('获取评论失败：', error);
+            // 降级到本地存储
+            loadFromLocalStorage();
+            return;
+        }
 
+        // 按话题ID分组
+        const commentsByTopic = {};
+        comments.forEach(comment => {
+            const topicId = comment.topic_id;
+            if (!commentsByTopic[topicId]) {
+                commentsByTopic[topicId] = [];
+            }
+            commentsByTopic[topicId].push({
+                id: comment.id.toString(),
+                author: comment.author,
+                content: comment.content,
+                time: new Date(comment.created_at).getTime(),
+                like: comment.likes || 0,
+                isLiked: false,
+                level: 0,
+                replies: []
+            });
+        });
+
+        // 渲染每个话题的评论
+        const topicIds = ['1','2','3','4','6','8','9','10','11','12','13','free'];
+        topicIds.forEach(topicId => {
+            const listEl = document.getElementById(`comment-list-${topicId}`);
+            if (!listEl) return;
+            
+            let topicComments = commentsByTopic[topicId] || [];
+            renderCommentList(listEl, topicComments, topicId);
+        });
+
+    } catch (err) {
+        console.error('初始化评论失败：', err);
+        // 降级到本地存储
+        loadFromLocalStorage();
+    }
+}
+        // 从本地存储加载评论（降级方案）
+function loadFromLocalStorage() {
+    const savedComments = JSON.parse(localStorage.getItem(COMMENT_KEY) || '{}');
+    const topicIds = ['1','2','3','4','6','8','9','10','11','12','13','free'];
+    
+    topicIds.forEach(topicId => {
+        const listEl = document.getElementById(`comment-list-${topicId}`);
+        if (!listEl) return;
+        
+        let comments = savedComments[topicId] || [];
+        renderCommentList(listEl, comments, topicId);
+    });
+}
+
+// 渲染评论列表
+function renderCommentList(listEl, comments, topicId) {
+    comments.sort((a,b) => (a.time || 0) - (b.time || 0));
+    listEl.innerHTML = '';
+
+    // 扁平化所有评论（包括回复）
+    const flatComments = [];
+    comments.forEach(cmt => {
+        flatComments.push({...cmt, level: 0});
+        if (cmt.replies && cmt.replies.length > 0) {
+            flattenReplies(cmt.replies, flatComments, cmt.id, cmt.author);
+        }
+    });
+
+    // 分组渲染
+    const commentGroups = [];
+    while (flatComments.length > 0) {
+        commentGroups.push(flatComments.splice(0, 5));
+    }
+
+    commentGroups.forEach((group, groupIndex) => {
+        const groupDiv = document.createElement('div');
+        groupDiv.className = 'comment-group';
+
+        if (commentGroups.length > 1 && groupIndex > 0) {
+            const collapseBtn = document.createElement('button');
+            collapseBtn.className = 'collapse-btn';
+            collapseBtn.innerHTML = `▼ 显示 ${group.length} 条评论`;
+            collapseBtn.onclick = () => {
+                const contentDiv = groupDiv.querySelector('.group-content');
+                if (contentDiv) toggleCollapse(collapseBtn, contentDiv);
+            };
+            groupDiv.appendChild(collapseBtn);
+        }
+
+        const contentDiv = document.createElement('div');
+        contentDiv.className = 'group-content';
+        if (groupIndex > 0) contentDiv.style.display = 'none';
+
+        // 渲染每条评论
+        group.forEach(cmt => {
+            const commentContainer = document.createElement('div');
+            commentContainer.className = `comment-container`;
+            
+            const cmtDiv = document.createElement('div');
+            cmtDiv.className = `comment ${cmt.parentId ? 'reply-comment' : ''}`;
+            cmtDiv.id = cmt.id;
+            cmtDiv.setAttribute('data-author', cmt.author);
+            cmtDiv.setAttribute('data-topic', topicId);
+            if (cmt.parentId) cmtDiv.setAttribute('data-parent', cmt.parentId);
+            
+            let contentHtml = '';
+            if (cmt.parentId) {
+                const parentCmt = findCommentById(cmt.parentId, topicId, comments);
+                if (parentCmt) {
+                    contentHtml += `<span class="reply-to">回复 @${parentCmt.author}：${parentCmt.content || ''}</span>`;
+                } else {
+                    contentHtml += `<span class="reply-to">回复 @已删除的评论</span>`;
+                }
+            }
+            
+            contentHtml += `
+                <div class="comment-content">
+                    <span class="comment-author">${cmt.author || '匿名用户'}：</span>
+                    <span>${cmt.content || ''}</span>
+                    <span class="comment-time">${formatTime(cmt.time || Date.now())}</span>
+                </div>
+                <div class="comment-actions">
+                    <button class="action-btn like-btn ${cmt.isLiked ? 'active' : ''}" onclick="toggleLike(this)">点赞(${cmt.like || 0})</button>
+                    <button class="action-btn reply-btn" onclick="showReplyInput('${cmt.id}', '${cmt.author || '匿名用户'}', '${topicId}')">回复</button>
+                    <button class="action-btn edit-btn" onclick="editComment('${cmt.id}', '${topicId}')">编辑</button>
+                    <button class="action-btn delete-btn" style="display:${isAdmin || (cmt.author === userName) ? 'inline-block' : 'none'}" onclick="deleteComment('${cmt.id}', '${topicId}')">删除</button>
+                </div>
+            `;
+            
+            cmtDiv.innerHTML = contentHtml;
+            commentContainer.appendChild(cmtDiv);
+            contentDiv.appendChild(commentContainer);
+        });
+
+        groupDiv.appendChild(contentDiv);
+        listEl.appendChild(groupDiv);
+    });
+}
                     // 分组渲染
                     const commentGroups = [];
                     while (flatComments.length > 0) {
@@ -1195,72 +1326,110 @@
         }
 
         // 查找评论
-        function findCommentById(commentId, topicId, comments = null) {
-            try {
-                const savedComments = comments || JSON.parse(localStorage.getItem(COMMENT_KEY) || '{}')[topicId] || [];
-                for (const cmt of savedComments) {
-                    if (cmt.id === commentId) return cmt;
-                    if (cmt.replies && cmt.replies.length > 0) {
-                        const found = findCommentById(commentId, topicId, cmt.replies);
-                        if (found) return found;
-                    }
-                }
-                return null;
-            } catch (err) {
-                console.error('查找评论失败：', err);
-                return null;
+       function findCommentById(commentId, topicId, comments = null) {
+    try {
+        const savedComments = comments || JSON.parse(localStorage.getItem(COMMENT_KEY) || '{}')[topicId] || [];
+        for (const cmt of savedComments) {
+            if (cmt.id === commentId) return cmt;
+            if (cmt.replies && cmt.replies.length > 0) {
+                const found = findCommentById(commentId, topicId, cmt.replies);
+                if (found) return found;
             }
         }
-
+        return null;
+    } catch (err) {
+        console.error('查找评论失败：', err);
+        return null;
+    }
+}
         // 提交主评论
-        function submitComment(topicId, editId = '') {
-            try {
-                const input = document.getElementById(`comment-input-${topicId}`);
-                if (!input) return;
-                
-                const content = input.value.trim();
-                if (!content) {
-                    alert('请输入评论内容！');
-                    return;
-                }
-
-                const savedComments = JSON.parse(localStorage.getItem(COMMENT_KEY) || '{}');
-                if (!savedComments[topicId]) savedComments[topicId] = [];
-
-                const existingComment = editId ? findCommentById(editId, topicId) : null;
-                const commentData = {
-                    id: editId || `cmt-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-                    author: userName,
-                    content: content,
-                    time: editId ? (existingComment?.time || Date.now()) : Date.now(),
-                    like: editId ? (existingComment?.like || 0) : 0,
-                    isLiked: editId ? (existingComment?.isLiked || false) : false,
-                    level: 0,
-                    replies: editId ? (existingComment?.replies || []) : []
-                };
-
-                if (editId) {
-                    replaceCommentById(editId, topicId, commentData, savedComments[topicId]);
-                } else {
-                    savedComments[topicId].push(commentData);
-                }
-
-                savedComments[topicId].sort((a,b) => (a.time || 0) - (b.time || 0));
-                localStorage.setItem(COMMENT_KEY, JSON.stringify(savedComments));
-                initComments();
-                
-                input.value = '';
-                const btn = document.querySelector(`.comment-input-container [data-topic="${topicId}"]`);
-                if (btn) {
-                    btn.innerText = '提交';
-                    btn.onclick = () => submitComment(topicId);
-                }
-            } catch (err) {
-                console.error('提交评论失败：', err);
-                alert('提交失败，请重试');
-            }
+     async function submitComment(topicId, editId = '') {
+    try {
+        const input = document.getElementById(`comment-input-${topicId}`);
+        if (!input) return;
+        
+        const content = input.value.trim();
+        if (!content) {
+            alert('请输入评论内容！');
+            return;
         }
 
+        // 如果是编辑模式，使用本地存储（暂时保持原逻辑）
+        if (editId) {
+            const savedComments = JSON.parse(localStorage.getItem(COMMENT_KEY) || '{}');
+            if (!savedComments[topicId]) savedComments[topicId] = [];
+
+            const existingComment = findCommentById(editId, topicId);
+            const commentData = {
+                id: editId,
+                author: userName,
+                content: content,
+                time: existingComment ? existingComment.time : Date.now(),
+                like: existingComment ? existingComment.like : 0,
+                isLiked: existingComment ? existingComment.isLiked : false,
+                level: 0,
+                replies: existingComment ? existingComment.replies : []
+            };
+
+            replaceCommentById(editId, topicId, commentData, savedComments[topicId]);
+            savedComments[topicId].sort((a,b) => (a.time || 0) - (b.time || 0));
+            localStorage.setItem(COMMENT_KEY, JSON.stringify(savedComments));
+            initComments();
+            
+            input.value = '';
+            const btn = document.querySelector(`.comment-input-container [data-topic="${topicId}"]`);
+            if (btn) {
+                btn.innerText = '提交';
+                btn.onclick = () => submitComment(topicId);
+            }
+            return;
+        }
+
+        // 新增评论，使用Supabase
+        const { data, error } = await supabase
+            .from('comments')
+            .insert([
+                { 
+                    topic_id: topicId.toString(),
+                    author: userName,
+                    content: content
+                }
+            ]);
+
+        if (error) {
+            console.error('提交评论失败：', error);
+            // 降级方案：保存到本地存储
+            const savedComments = JSON.parse(localStorage.getItem(COMMENT_KEY) || '{}');
+            if (!savedComments[topicId]) savedComments[topicId] = [];
+            
+            const commentData = {
+                id: `cmt-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+                author: userName,
+                content: content,
+                time: Date.now(),
+                like: 0,
+                isLiked: false,
+                level: 0,
+                replies: []
+            };
+            
+            savedComments[topicId].push(commentData);
+            localStorage.setItem(COMMENT_KEY, JSON.stringify(savedComments));
+            alert('网络异常，评论已保存到本地');
+        } else {
+            // 清空输入框
+            input.value = '';
+            alert('评论提交成功！');
+        }
+        
+        // 重新加载评论
+        await initComments();
+        
+    } catch (err) {
+        console.error('提交评论异常：', err);
+        alert('提交异常，请重试');
+    }
+}
         // 替换评论
         function replaceCommentById(commentId, topicId, newComment, comments) {
             for (let i = 0; i < comments.length; i++) {
